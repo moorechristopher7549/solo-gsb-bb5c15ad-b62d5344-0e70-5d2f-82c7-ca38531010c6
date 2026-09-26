@@ -2094,29 +2094,60 @@
     showBatchSheetEmpty(reason, true);
   }
 
-  // ---------- 打印前设置 @page：单张为标签尺寸，拼版为 A4 对应方向 ----------
+  // ---------- 打印门禁 ----------
   var pageStyle = null;
+  // 打印前必须依据「当前输入」重新判定可打印成品，而不能沿用防抖窗口前的
+  // lastGood 与按钮状态：flushRender() 先同步结算待处理渲染，再读取本次
+  // 渲染刷新后的门禁。无效时返回非空原因，打印样式不输出单张或任何拼版内容。
+  function resolvePrintMode() {
+    if (printMode === 'sheet') {
+      if (!el.sheetPrintBtn.disabled && lastSheets) return 'sheet';
+      return null;
+    }
+    if (printMode === 'batch') {
+      if (!el.batchSheetPrintBtn.disabled && lastBatchSheets) return 'batch';
+      return null;
+    }
+    // Ctrl+P 默认单张；单张以刚渲染出的 lastGood 与单张按钮门禁为准
+    if (!el.printBtn.disabled && lastGood) return 'single';
+    return null;
+  }
+
+  // 各打印方式被拦截时的说明（单张取当前状态行，即本次渲染给出的失败原因）
+  function blockedReason(mode) {
+    if (mode === 'sheet') {
+      return el.sheetHint.textContent.trim() ||
+        '当前成品未通过校验，拼版打印不可用。';
+    }
+    if (mode === 'batch') {
+      return el.batchSheetHint.textContent.trim() ||
+        '异款拼版未生成或已失效，请重新点击「开始校样」后再打印。';
+    }
+    return el.status.textContent.trim() ||
+      '当前内容未通过排版、二维码或术语校验，不能打印；请先修正输入。';
+  }
+
   function beforePrint() {
-    var sheetMode = printMode === 'sheet' && !el.sheetPrintBtn.disabled && lastSheets;
-    var batchMode = printMode === 'batch' && !el.batchSheetPrintBtn.disabled && lastBatchSheets;
-    var singleMode = printMode !== 'sheet' && printMode !== 'batch' &&
-      !el.printBtn.disabled && lastGood;
-    document.body.classList.toggle('print-sheet', !!sheetMode);
-    document.body.classList.toggle('print-batch', !!batchMode);
+    flushRender(); // 结算 120ms 防抖窗口内尚未应用的修改
+    var mode = resolvePrintMode();
+    document.body.classList.toggle('print-sheet', mode === 'sheet');
+    document.body.classList.toggle('print-batch', mode === 'batch');
+    document.body.classList.toggle('print-none', !mode);
     if (!pageStyle) {
       pageStyle = document.createElement('style');
       document.head.appendChild(pageStyle);
     }
-    if (batchMode) {
+    if (mode === 'batch') {
       pageStyle.textContent = '@page { size: ' + lastBatchSheets.pageW + 'mm ' +
         lastBatchSheets.pageH + 'mm; margin: 0; }';
-    } else if (sheetMode) {
+    } else if (mode === 'sheet') {
       pageStyle.textContent = '@page { size: ' + lastSheets.pageW + 'mm ' +
         lastSheets.pageH + 'mm; margin: 0; }';
-    } else if (singleMode) {
+    } else if (mode === 'single') {
       pageStyle.textContent = '@page { size: ' +
         lastGood.input.widthMm + 'mm ' + lastGood.input.heightMm + 'mm; margin: 0; }';
     } else {
+      // 无效：不设置任何标签/拼版页尺寸，配合 body.print-none 不输出任何成品
       pageStyle.textContent = '';
     }
   }
@@ -2131,10 +2162,22 @@
   var selectedVersion = 'orig'; // 成品版本：'orig' 原稿 / 'rev' 修订稿
   var revWasActive = false;     // 上一轮渲染时修订稿是否非空（用于新填写时默认选中修订稿）
 
+  // 输入变化后 120ms 防抖重排。打印前必须先调用 flushRender() 立即结算待处理
+  // 渲染：否则在防抖窗口内按 Ctrl+P / 点打印，会按旧的 lastGood 与按钮状态
+  // 输出修改前的成品。
   var schedule = (function () {
     var timer = null;
-    return function () { clearTimeout(timer); timer = setTimeout(render, 120); };
+    function fn() { clearTimeout(timer); timer = setTimeout(render, 120); }
+    fn.flush = function () {
+      if (timer !== null) {
+        clearTimeout(timer);
+        timer = null;
+        render(); // 同步结算：依据当前输入重排并刷新 lastGood 与各打印门禁
+      }
+    };
+    return fn;
   })();
+  function flushRender() { schedule.flush(); }
 
   ['input', 'change'].forEach(function (evt) {
     el.title.addEventListener(evt, schedule);
@@ -2221,24 +2264,49 @@
   updateAccessionHint();
   paginateBatchSheets(); // 初始空态：提示先粘贴 CSV 校样
 
-  el.printBtn.addEventListener('click', function () {
-    printMode = 'single';
+  // 统一打印入口：先结算待处理渲染，再依据当前输入判定本次模式是否可打印。
+  // 无效时不打开打印对话框，并在面板给出本次拦截原因；修正输入后直接打印即恢复。
+  function requestPrint(mode) {
+    printMode = mode;
+    flushRender();
+    var resolved = resolvePrintMode();
+    if (!resolved) {
+      var reason = blockedReason(mode);
+      setStatus('已阻止打印：' + reason, 'err');
+      return;
+    }
     window.print();
+  }
+
+  el.printBtn.addEventListener('click', function () {
+    requestPrint('single');
   });
   el.sheetPrintBtn.addEventListener('click', function () {
-    printMode = 'sheet';
-    window.print();
+    requestPrint('sheet');
   });
   el.batchSheetPrintBtn.addEventListener('click', function () {
-    printMode = 'batch';
-    window.print();
+    requestPrint('batch');
   });
+
+  // Ctrl/Cmd+P：浏览器快捷键不会经过按钮，故在捕获阶段拦截——先结算防抖
+  // 渲染并按单张门禁重新判定；当前输入无效（排不下、二维码或术语校验失败等）
+  // 时阻止打印，避免把修改前成品或错误占位展签送入打印机。
+  document.addEventListener('keydown', function (e) {
+    if ((e.ctrlKey || e.metaKey) && !e.altKey &&
+        (e.key === 'p' || e.key === 'P' || e.keyCode === 80)) {
+      e.preventDefault();
+      e.stopPropagation();
+      requestPrint('single');
+    }
+  }, true);
+
   window.addEventListener('beforeprint', beforePrint);
   window.addEventListener('afterprint', function () {
     // 打印结束后恢复默认单张模式，避免下次 Ctrl+P 误用拼版
     printMode = 'single';
     document.body.classList.remove('print-sheet');
     document.body.classList.remove('print-batch');
+    document.body.classList.remove('print-none');
   });
 
   var resizeTimer = null;

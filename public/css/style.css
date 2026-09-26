@@ -650,6 +650,16 @@ button:disabled { background: #aaa5; cursor: not-allowed; }
   .sheet-area { display: none !important; }
   .batch-sheet-area { display: none !important; }
 
+  /* 错误占位展签仅用于屏幕提示，任何打印模式都不得输出 */
+  .label-error { display: none !important; }
+
+  /* 打印门禁未通过（body.print-none）：当前输入未结算出可打印成品
+     （防抖窗口内的修改、排版/二维码/术语校验失败等），单张与两种拼版
+     内容一律不输出，避免错误占位展签或修改前成品进入打印 */
+  body.print-none .stage,
+  body.print-none .sheet-area,
+  body.print-none .batch-sheet-area { display: none !important; }
+
   /* 拼版打印（body.print-sheet）：只输出拼版页，不输出编辑面板与单张预览 */
   body.print-sheet .stage { display: none !important; }
   body.print-sheet .sheet-area {
