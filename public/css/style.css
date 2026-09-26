@@ -650,6 +650,12 @@ button:disabled { background: #aaa5; cursor: not-allowed; }
   .sheet-area { display: none !important; }
   .batch-sheet-area { display: none !important; }
 
+  /* 无可打印成品（body.print-none，校验未通过或门禁禁用）：
+     单张展签（含错误占位）与任何拼版内容一律不输出 */
+  body.print-none .stage,
+  body.print-none .sheet-area,
+  body.print-none .batch-sheet-area { display: none !important; }
+
   /* 拼版打印（body.print-sheet）：只输出拼版页，不输出编辑面板与单张预览 */
   body.print-sheet .stage { display: none !important; }
   body.print-sheet .sheet-area {

@@ -2097,12 +2097,19 @@
   // ---------- 打印前设置 @page：单张为标签尺寸，拼版为 A4 对应方向 ----------
   var pageStyle = null;
   function beforePrint() {
+    // 先结算待处理的防抖渲染：按当前输入重排并刷新 lastGood、拼版与按钮门禁，
+    // 避免在 120ms 防抖窗口内按修改前的成品或旧门禁输出
+    schedule.flush();
     var sheetMode = printMode === 'sheet' && !el.sheetPrintBtn.disabled && lastSheets;
     var batchMode = printMode === 'batch' && !el.batchSheetPrintBtn.disabled && lastBatchSheets;
     var singleMode = printMode !== 'sheet' && printMode !== 'batch' &&
       !el.printBtn.disabled && lastGood;
     document.body.classList.toggle('print-sheet', !!sheetMode);
     document.body.classList.toggle('print-batch', !!batchMode);
+    // 当前输入无可打印成品（排版/链接/术语等校验未通过）：
+    // 打印样式不输出单张或任何拼版内容
+    document.body.classList.toggle('print-none',
+      !sheetMode && !batchMode && !singleMode);
     if (!pageStyle) {
       pageStyle = document.createElement('style');
       document.head.appendChild(pageStyle);
@@ -2133,7 +2140,19 @@
 
   var schedule = (function () {
     var timer = null;
-    return function () { clearTimeout(timer); timer = setTimeout(render, 120); };
+    function scheduleFn() {
+      clearTimeout(timer);
+      timer = setTimeout(function () { timer = null; render(); }, 120);
+    }
+    // 打印前结算：若仍有待处理的防抖渲染，取消计时器并立即同步渲染，
+    // 使 lastGood、拼版与打印按钮门禁都按当前输入重新判定
+    scheduleFn.flush = function () {
+      if (timer === null) return;
+      clearTimeout(timer);
+      timer = null;
+      render();
+    };
+    return scheduleFn;
   })();
 
   ['input', 'change'].forEach(function (evt) {
@@ -2239,6 +2258,7 @@
     printMode = 'single';
     document.body.classList.remove('print-sheet');
     document.body.classList.remove('print-batch');
+    document.body.classList.remove('print-none');
   });
 
   var resizeTimer = null;
